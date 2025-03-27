@@ -1,0 +1,3 @@
+[submodule "src/app/ecgAIWeb"]
+	path = src/app/ecgAIWeb
+	url = https://github.com/Cheburek28/ecgAIWeb.git
