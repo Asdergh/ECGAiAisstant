@@ -1,7 +1,68 @@
-import torch
-from torch.utils.data import Dataset
+import torch as th
+import tqdm as tq
+import h5py as h5
+import wfdb as wf
+import pandas as pd
+import os
 
 
+
+from torch.utils.data import Dataset, DataLoader
+from utils import convert_to_spec, convert_to_wavelet
+
+
+class SignalsSet(Dataset):
+
+    def __init__(self, params: dict) -> None:
+
+        super().__init__()
+        self.params = params
+        self._signals_ = h5.File(self.params["path"], "r")["tracings"]
+        self._signal_transform_ = {
+            "spectrogram": convert_to_spec,
+            "wavelet": convert_to_wavelet
+        }
+    
+    def __len__(self) -> int:
+        return self._signals_.shape[0]
+
+    def __getitem__(self, idx: int) -> None:
+        
+        sample = th.Tensor(self._signals_[idx])
+        spec =  self._signal_transform_[self.params["tf_type"]](sample, spec_size=self.params["spec_size"])
+        return spec
+
+
+
+class ECGSpecsDataset(Dataset): 
+    
+    def __init__(self, params: dict) -> None:
+
+        super().__init__()
+        self.params = params
+        self._signal_transform_ = {
+            "spectrogram": convert_to_spec,
+            "wavelet": convert_to_wavelet
+        }
+        self.annots = pd.read_csv(self.params["annotations"])
+        self.annots = self.annots[self.annots["RANDID"] <= 2004]
+    
+
+    def __len__(self) -> int:
+        return len(self.annots["EGREFID"].to_list())
+
+    def __getitem__(self, idx: int) -> tuple:
+
+        sample = self.annots.iloc[idx, :]
+        signal = self._signal_transform_["wavelet"](wf.rdrecord(os.path.join(
+            self.params["root"],
+            str(sample["RANDID"]),
+            sample["EGREFID"]
+        )).p_signal)
+
+        return (signal, sample["RR"], sample["PR"], sample["QT"], sample["QRS"])
+        
+        
 class ECGDataset(Dataset):
     def __init__(self, ecg_data, reports, transform=None):
         """
@@ -31,9 +92,17 @@ class ECGDataset(Dataset):
 
         # Преобразуем значения параметров в тензор
         keys = ['rr_interval', 'p_onset', 'p_end', 'qrs_onset', 'qrs_end', 't_end', 'p_axis', 'qrs_axis', 't_axis']
-        ecg_tensor = torch.tensor([ecg_sample[key] for key in keys], dtype=torch.float)
+        ecg_tensor = th.tensor([ecg_sample[key] for key in keys], dtype=th.float)
 
-        return {"ecg": ecg_tensor, "report": report}
+        return {"ecg": ecg_tensor, "report": report}  
+
+
+ 
+
+
+    
+        
+    
 
 
 if __name__ == '__main__':
