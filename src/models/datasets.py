@@ -4,9 +4,9 @@ import h5py as h5
 import wfdb as wf
 import pandas as pd
 import os
+import numpy as np
 
-
-
+from tensorflow.keras.preprocessing.text import Tokenizer
 from torch.utils.data import Dataset, DataLoader
 from utils import convert_to_spec, convert_to_wavelet
 
@@ -29,7 +29,10 @@ class SignalsSet(Dataset):
     def __getitem__(self, idx: int) -> None:
         
         sample = th.Tensor(self._signals_[idx])
-        spec =  self._signal_transform_[self.params["tf_type"]](sample, spec_size=self.params["spec_size"])
+        spec =  self._signal_transform_[self.params["tf_type"]](
+            sample, 
+            spec_size=self.params["spec_size"]
+        )
         return spec
 
 
@@ -45,7 +48,6 @@ class ECGSpecsDataset(Dataset):
             "wavelet": convert_to_wavelet
         }
         self.annots = pd.read_csv(self.params["annotations"])
-        self.annots = self.annots[self.annots["RANDID"] <= 2004]
     
 
     def __len__(self) -> int:
@@ -54,13 +56,15 @@ class ECGSpecsDataset(Dataset):
     def __getitem__(self, idx: int) -> tuple:
 
         sample = self.annots.iloc[idx, :]
-        signal = self._signal_transform_["wavelet"](wf.rdrecord(os.path.join(
+        signal_ = self._signal_transform_["wavelet"](wf.rdrecord(os.path.join(
             self.params["root"],
             str(sample["RANDID"]),
             sample["EGREFID"]
-        )).p_signal)
+        )).p_signal).to(th.float32)
+        signal_ = signal_ / signal_.max()
 
-        return (signal, sample["RR"], sample["PR"], sample["QT"], sample["QRS"])
+        features_ = th.Tensor([sample["RR"], sample["PR"], sample["QT"], sample["QRS"]]).to(th.float32) / (100.0)
+        return (signal_, features_)
         
         
 class ECGDataset(Dataset):
@@ -94,51 +98,128 @@ class ECGDataset(Dataset):
         keys = ['rr_interval', 'p_onset', 'p_end', 'qrs_onset', 'qrs_end', 't_end', 'p_axis', 'qrs_axis', 't_axis']
         ecg_tensor = th.tensor([ecg_sample[key] for key in keys], dtype=th.float)
 
-        return {"ecg": ecg_tensor, "report": report}  
+        return {"ecg": ecg_tensor, "report": report}   
+    
+
+class MedicalReportsSet(Dataset):
 
 
- 
+    def __init__(self, params: dict) -> None:
+
+        super().__init__()
+        
+        self._texts_ = params["texts"]
+        self._features_ = params["features"]
+        self.trunc_depth = params["trunc_depth"]
+        
+        self.return_obj = "idxs"
+        if "return_type" in params:
+            self.return_obj = params["return_type"]
+        
+          
+        if isinstance(self._texts_, str):
+            with open(self._texts_, "r") as file:
+                
+                self._texts_ = file.readlines()
+                max_len = float("inf")
+                for sample in self._texts_:
+                    sample = sample.split(" ")
+                    if max_len < len(sample) + 2:
+                        max_len = len(sample) + 2
+
+                for idx, sample in enumerate(self._texts_):   
+                
+                    sample = sample.replace("\\n", "").replace("\\t", " ").split(" ")
+                    sample = self._truncation_(trunc_depth=self.trunc_depth, texts=sample)
+                    sample = ["<BOS>", ] + sample + ["<EOS>", ]
+                    self._texts_[idx] = sample
+
+        if isinstance(self._features_, str):
+            self._features_ = np.loadtxt(self._features_)
+
+        
+        self.tokenizer = Tokenizer()
+        self.tokenizer.fit_on_texts(self._texts_)
+        self._sequences_ = np.asarray(self.tokenizer.texts_to_sequences(self._texts_))
+        
+
+        _idxs_ = [
+            idx for idx in range(self._features_.shape[0]) 
+            if (self._features_[idx] < 0).any()
+        ]
+        self._texts_ = [text for (idx, text) in enumerate(self._texts_) if idx not in _idxs_]
+        self._features_ = np.delete(self._features_, _idxs_, axis=0)
+        self._sequences_ = np.delete(self._sequences_, _idxs_, axis=0)
+        
+
+    def _truncation_(self, trunc_depth: int, texts: list) -> list:
+        
+        if len(texts) < trunc_depth:
+            texts += ["<PAD>" for _ in range(trunc_depth - len(texts))]
+        
+        else:
+            texts = texts[:trunc_depth]
+         
+        return texts
+
+
+    def __len__(self) -> None:
+        return len(self._sequences_)
+
+
+    def __getitem__(self, idx: int) -> None:
+        
+        if self.return_obj == "idxs":
+            return (
+                th.Tensor(self._features_[idx] / 100.0).to(th.float32), 
+                th.Tensor(self._sequences_[idx]).to(th.int32)
+            )
+    
+        elif self.return_obj == "texts":
+            return (
+                th.Tensor(self._features_[idx] / 100.0).to(th.float32),
+                self._texts_[idx]
+            )
+    
+    
+
+        
+if __name__ == "__main__":
+    
+    # dataset = MedicalReportsSet({
+    #     "texts": "C:\\\\Users\\\\1\\\\Desktop\\\\PythonProjects\\\\ECG_project\\\\meta\\\\token_generator_meta\\\\texts.txt",
+    #     "collate_fn": {
+    #         "type": "truncate",
+    #         "params": {
+    #             "trunc_depth": 7
+    #         }
+    #     }
+    # })
+    # print(np.asarray(dataset.tokenizer.texts_to_sequences(dataset._texts_)).shape)
+
+    
+
+    texts = "C:\\Users\\1\\Desktop\\PythonProjects\\ECG_project\\meta\\token_generator_meta\\texts.txt"
+    features = "C:\\Users\\1\\Desktop\\PythonProjects\\ECG_project\\meta\\token_generator_meta\\features.txt"
+    dataset = MedicalReportsSet({
+        "texts": texts,
+        "features": features,
+        "trunc_depth": 7,
+        "return_type": "texts"
+    })
+    loader = DataLoader(
+        dataset=dataset,
+        batch_size=32,
+        shuffle=True
+    )
+    
+    sample = next(iter(loader))
+    # print(sample[0].size(), sample[1])
+    
+
+        
 
 
     
         
     
-
-
-if __name__ == '__main__':
-    # Имитация данных ЭКГ с параметрами QRS
-    ecg_samples = [
-        {
-            'rr_interval': 0.8,
-            'p_onset': 0.1,
-            'p_end': 0.2,
-            'qrs_onset': 0.3,
-            'qrs_end': 0.4,
-            't_end': 0.6,
-            'p_axis': 45.0,
-            'qrs_axis': 60.0,
-            't_axis': 70.0,
-        },
-        {
-            'rr_interval': 0.9,
-            'p_onset': 0.15,
-            'p_end': 0.25,
-            'qrs_onset': 0.35,
-            'qrs_end': 0.45,
-            't_end': 0.65,
-            'p_axis': 50.0,
-            'qrs_axis': 65.0,
-            't_axis': 75.0,
-        }
-    ]
-
-    # Соответствующие отчеты
-    reports = [
-        "Отчет для примера 1: параметры в норме",
-        "Отчет для примера 2: небольшое отклонение",
-    ]
-
-    dataset = ECGDataset(ecg_samples, reports)
-    sample = dataset[0]
-    print("ECG данные:", sample["ecg"])
-    print("Отчет:", sample["report"])

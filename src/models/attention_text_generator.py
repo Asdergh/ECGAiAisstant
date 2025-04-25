@@ -12,13 +12,75 @@ from torch.nn import (
     Dropout,
     functional
 )
-
+from transformers import OpenAIGPTLMHeadModel, OpenAIGPTTokenizer
 
 _activations_ = {
     "relu": ReLU,
     "softmax": Softmax,
     "sigmoid": Sigmoid
 }
+
+
+class AttEmbnedding(Module):
+    
+    def __init__(self, params) -> None:
+
+        super().__init__()
+        self.embedding_dim = params["embedding_dim"]
+        self.dp_rate = params["dp_rate"]
+        self.att_heads = params["att_heads"]
+        self.vocab_size = params["vocab_size"]
+
+        self.seq_len = 1
+        if "seq_len" in params:
+            self.seq_len = params["seq_len"]
+
+        self._embedding_ = Embedding(
+            num_embeddings=self.vocab_size,
+            embedding_dim=self.embedding_dim
+        )
+        
+        self._attention_ = MultiheadAttention(
+            embed_dim=self.embedding_dim,
+            num_heads=self.att_heads
+        )
+    
+    def __call__(self, reinforce: th.Tensor, text_tokens: th.Tensor=None) -> th.Tensor:
+
+        weights = th.normal(0.0, 1.0, (reinforce.size()[-1], self.embedding_dim)).T
+
+        reinforce = functional.linear(reinforce, weight=weights).view(
+            1, 
+            reinforce.size()[0], 
+            self.embedding_dim
+        ).repeat(self.seq_len, 1, 1)
+        reinforce = reinforce.contiguous()
+        
+        if text_tokens is not None:
+            embedding = self._embedding_(text_tokens).permute(1, 0, 2)
+            att_embedding = self._attention_(
+                embedding, 
+                reinforce, 
+                reinforce
+            )[0].permute(1, 0, 2).contiguous()
+        
+        else:
+            att_embedding = self._attention_(
+                reinforce, 
+                reinforce, 
+                reinforce
+            )[0].permute(1, 0, 2).contiguous()
+
+        
+        if text_tokens is not None:
+            embedding = embedding.permute(1, 0, 2).contiguous()
+            embedding += att_embedding
+        
+        else:
+            embedding = att_embedding
+
+        return embedding
+
 class TokenGenerator(Module):
 
     def __init__(self, params: dict) -> None:
@@ -29,51 +91,33 @@ class TokenGenerator(Module):
         self.hiden_size = params["hiden_size"]
         self.lstm_heads = params["lstm_heads"]
         self.num_att_heads = params["num_att_heads"]
-
         
+
+
+
+        self.dp_raet = 0.1
+        if "dp_rate" in params:
+            self.dp_rate = params["dp_rate"]
+
         self.seq_len = None
         if "seq_len" in params:
             self.seq_len = params["seq_len"]
 
         self.input_dim = None
-        if "input_dim" in params["input_dim"]:
+        if "input_dim" in params:
             self.input_dim = params["input_dim"]
 
-        _gen_type_ = params["gen_type"]
+        _gen_type_ = "token_gen"
+        if "gen_type" in params:
+            _gen_type_ = params["gen_type"]
+
         _builders_ = {
-            "toke_gen": self._build_token_gen_,
-            "seq_gen": self._build_seq_gen_
+            "token_gen": self._build_token_gen_,
+            # "seq_gen": self._build_seq_gen_
         }
         _builders_[_gen_type_]()
 
-        assert (_gen_type_ == "seq_gen") and (self.seq_len is None & self.input_dim is None), f"""
 
-        If you want to use seq generator insted of next token prdictor you must 
-        specify the size of input encoded vector and seq_lenn. Curent values:
-        
-            -> seq_len: [{self.seq_len}] <-
-            -> input_size: [{self.input_dim}] <-
-
-        """
-        
-
-        self.dp_rate = 0.0
-        if "dp_rate" in params:
-            self.dp_rate = params["dp_rate"]
-
-        
-    
-    
-    # def _build_seq_gen_(self) -> None:
-
-
-    #     self._projection_ = Sequential(
-    #         Linear(self.input_dim, self.seq_len),
-    #         _activations_["relu"]
-    #         Embedding(
-                
-    #         )
-    #     )
     def _build_token_gen_(self) -> None:
         
         self._logits_ = Sequential(
@@ -86,27 +130,32 @@ class TokenGenerator(Module):
             num_embeddings=self.vocab_size, 
             embedding_dim=self.emb_dim
         )
+
+        self._att_embedding_ = AttEmbnedding({
+            "embedding_dim": self.emb_dim,
+            "vocab_size": self.vocab_size,
+            "dp_rate": self.dp_rate,
+            "att_heads": self.num_att_heads
+        })
+
         self._rnn_ = LSTM(
             input_size=self.emb_dim,
             hidden_size=self.hiden_size,
             num_layers=self.lstm_heads
         )
-        self._attention_ = MultiheadAttention(
-            embed_dim=self.emb_dim,
-            num_heads=self.num_att_heads
-        )
+
 
     def __call__(self, inputs: th.Tensor, reinforce: th.Tensor = None) -> th.Tensor:
 
-        emb = self._embedding_(inputs)
-        if reinforce is not None:
-            
-            weights = th.normal(0.0, 1.0, (reinforce.size()[-1], self.emb_dim)).T
-            reinforce = functional.linear(reinforce, weights)
-            reinforce = reinforce.view(1, reinforce.size()[0], self.emb_dim)
         
-            att_embedding = self._attention_(emb.permute(1, 0, 2), reinforce, reinforce)[0].permute(1, 0, 2)
-            emb += att_embedding
+        if reinforce is not None:
+            emb = self._att_embedding_(
+                inputs,
+                reinforce
+            )
+        
+        else:
+            emb = self._embedding_(inputs)
         
         rnn_out, _ = self._rnn_(emb)
         rec_out = th.flatten(
@@ -118,6 +167,84 @@ class TokenGenerator(Module):
         rec_out = functional.linear(rec_out, weights)
         
         return self._logits_(rec_out)
+
+
+
+class GPTBasedTokenGenerator(Module):
+
+
+    def __init__(self, max_size: int, generation_config: dict) -> None:
+
+        super().__init__()
+        self.max_size = max_size
+        self.gen_conf = generation_config
+
+        self.emb = AttEmbnedding({
+            "vocab_size": 40478,
+            "embedding_dim": 768,
+            "dp_rate": 0.45,
+            "att_heads": 8,
+            "seq_len": max_size
+        })
+        self.gpt = OpenAIGPTLMHeadModel.from_pretrained("openai-community/openai-gpt")
+        self.tokenizer = OpenAIGPTTokenizer.from_pretrained("openai-community/openai-gpt")
+        self.tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+    
+
+    def generate(self, embeddings: th.Tensor=None) -> str:
+
+        if embeddings is None:
+            start_token = self.tokenizer.encode("<bos>", return_tensors="pt")
+            gen_tokens = self.gpt.generate(
+                inputs=start_token, 
+                **self.gen_conf
+            ).squeeze(dim=0)
+            
+        
+        else:
+            logits = self.gpt(inputs_embeds=embeddings).logits
+            gen_tokens = logits.argmax(dim=-1).squeeze(dim=0)
+
+        print(gen_tokens.size())
+        # return self.tokenizer.decode(
+        #     gen_tokens, 
+        #     skip_special_tokens=True
+        # )
+     
+    def add_tokens(self, tokens: list[str]) -> None:
+
+        self.tokenizer.add_tokens(tokens)
+        vocab_size = len(self.tokenizer.get_vocab())
+        self.gpt.resize_token_embeddings(vocab_size)
+
+    def _tokenize_(self, texts: list[str]) -> th.Tensor:
+
+        tokenization = self.tokenizer(
+            texts, 
+            return_tensors="pt", 
+            padding=True
+        )["input_ids"]
+        
+        seq_len = tokenization.size()[1]
+        batch_size = tokenization.size()[0]
+        if seq_len < self.max_size:
+            need_size = self.max_size - seq_len
+            tokenization = th.cat([
+                tokenization, 
+                th.zeros(batch_size, need_size)
+            ], dim=1)
+        
+        return tokenization.to(th.long)
+
+    def __call__(self, inputs: th.Tensor, texts: list[str]) -> th.tensor:
+
+        tokenization = self._tokenize_(texts=texts)
+        emb = self.emb(inputs)
+        loss = self.gpt(inputs_embeds=emb, labels=tokenization).loss
+        return loss
+        
+        
+        
 
 
 
@@ -136,7 +263,7 @@ if __name__ == "__main__":
     SEQ_LEN = 64
 
     test_input = th.randint(0, VOCAB_SIZE, (BATCH_SIZE, SEQ_LEN))
-    reinforce = th.normal(0.0, 1.1, (BATCH_SIZE, 100))
+    reinforce = th.normal(0.0, 1.1, (BATCH_SIZE, 4))
     model = TokenGenerator({
         "embedding_dim": EMBEDDING_DIM,
         "vocab_size": VOCAB_SIZE,
