@@ -18,10 +18,11 @@ from torchvision.datasets import CIFAR10
 from tqdm import tqdm
 
 
-
 _vision_tfs_ = {
     "resize": Resize((128, 128)),
 }
+
+
 def convert_to_spec(tensor: np.ndarray, spec_size: tuple = (129, 129)) -> th.Tensor:
 
     if len(tensor.shape) == 2:
@@ -67,7 +68,7 @@ def convert_to_wavelet(tensor: th.Tensor, spec_size: tuple = (128, 128)):
     return out
 
 
-def collate_ImgLabels(batch) -> tuple[th.Tensor]:
+def collate_ImgLabels(batch):
 
     images = []
     labels = []
@@ -132,7 +133,7 @@ def signals2waves(paths: dict, ) -> None:
 
 def extract_text_from_df(
     path: str, target_path: str, 
-    cols: list[str], sep: str = ".",
+    cols, sep: str = ".",
 ) -> None:
 
     texts = ""

@@ -1,6 +1,6 @@
 /.idea
-meta
-test
+src/models/meta
+src/models/test
 reserch_conv_att.ipynb
 reserch_token_generator.ipynb
-config.py
+src/models/config.py

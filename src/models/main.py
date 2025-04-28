@@ -7,6 +7,7 @@ from collections import OrderedDict
 
 
 from typing import Union, BinaryIO, IO, List
+
 from conv_attention_model import *
 from config import *
 from utils import *
@@ -17,6 +18,8 @@ _read_io_ = {
     "yaml": yaml.safe_load,
     "json": json.load
 }
+
+
 class PipeLine:
 
     def __init__(
@@ -41,8 +44,7 @@ class PipeLine:
                     with open(file, "r") as file:
                         config = _read_io_[file_type](file)
                         self.config.update(config)
-                
-                
+
         if isinstance(config, list):
 
             self.config = {}
@@ -79,7 +81,6 @@ class PipeLine:
             weights = th.load(path, weights_only=True)
             self._signal_net_.load_state_dict(weights)
 
-
         print(type(self._signal_net_.state_dict()))
         self._payload_ = {}
         if "generation_config" in self.config:
@@ -94,10 +95,8 @@ class PipeLine:
     @generation_config.setter
     def generation_config(self, config: dict) -> None:
         self._payload_["parameters"] = config
-    
 
-    def __call__(self, path: str) -> str:
-        
+    def __call__(self, path: str, MISTRAL_URL=None) -> str:
         print("STARTED")
         signal = wf.rdrecord(path).p_signal
         signal = th.Tensor(signal).T
@@ -188,9 +187,9 @@ if __name__ == "__main__":
         }
     }
 
-    path = "C:\\Users\\1\\Downloads\\01000_lr"
-    pipeline = PipeLine(config=config)
-    out = pipeline(path)
+    path = "test/00689D31-8491-4643-B3C8-45241FBBD47C"
+    pipeline = PipeLine(config=config, weights="meta/model_weights_1.pt")
+    out = pipeline(path, MISTRAL_URL=MISTRAL_URL)
     print(out)
     
 
