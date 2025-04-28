@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 from main import PipeLine
 import wfdb                                           # чтение .hea/.dat
 import uvicorn
+import zipfile
 
 from config import MISTRAL_URL
 
@@ -79,17 +80,41 @@ def health():
 
 @app.post("/ecg")
 async def analyze_ecg(file: UploadFile = File(...)):
-    # принимаем zip или одиночный WFDB-файл
-    if not file.filename.endswith((".hea", ".dat", ".zip")):
-        raise HTTPException(status_code=400, detail="Unsupported file type")
+    # принимаем только zip
+    if not file.filename.endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Only .zip files are supported")
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        path = os.path.join(tmpdir, file.filename)
-        with open(path, "wb") as f:
+        zip_path = os.path.join(tmpdir, file.filename)
+        with open(zip_path, "wb") as f:
             f.write(await file.read())
 
+        # Распаковываем архив
         try:
-            report = pipeline(path, MISTRAL_URL=MISTRAL_URL)
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(tmpdir)
+        except zipfile.BadZipFile:
+            raise HTTPException(status_code=400, detail="Uploaded file is not a valid zip archive")
+
+        # Проверяем что внутри лежат .hea и .dat с одинаковыми названиями
+        files = os.listdir(tmpdir)
+        hea_files = [f for f in files if f.endswith('.hea')]
+        dat_files = [f for f in files if f.endswith('.dat')]
+
+        if len(hea_files) != 1 or len(dat_files) != 1:
+            raise HTTPException(status_code=400, detail="Zip archive must contain exactly one .hea and one .dat file")
+
+        hea_name = os.path.splitext(hea_files[0])[0]
+        dat_name = os.path.splitext(dat_files[0])[0]
+
+        if hea_name != dat_name:
+            raise HTTPException(status_code=400, detail=".hea and .dat filenames must match")
+
+        # Получаем базовый путь без расширения
+        base_path = os.path.join(tmpdir, hea_name)
+
+        try:
+            report = pipeline(base_path, MISTRAL_URL=MISTRAL_URL)
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc))
 
