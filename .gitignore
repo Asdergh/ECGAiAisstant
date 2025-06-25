@@ -88,5 +88,4 @@ celerybeat-schedule
 
 # tests
 gigachat_test.py
-meta/
 
