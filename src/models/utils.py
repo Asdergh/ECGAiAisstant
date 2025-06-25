@@ -1,6 +1,5 @@
 import cv2
 import torch as th
-import h5py as h5
 import numpy as np
 import tqdm as tq
 import pandas as pd
