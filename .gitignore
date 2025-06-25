@@ -85,3 +85,8 @@ celerybeat-schedule
 
 # VSCode (если используется)
 .vscode/
+
+# tests
+gigachat_test.py
+meta/
+
