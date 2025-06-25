@@ -9,7 +9,7 @@ services:
       sh -c "python3 api.py"
 #    environment:
 
-    #    restart: always
+    restart: always
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/healthz" ]
       interval: 10s
@@ -30,8 +30,8 @@ services:
              python3 manage.py migrate
              python3 manage.py runserver 0.0.0.0:8001"
     ports:
-      - "8001:8001"
-#    restart: always
+      - "80:8001"
+    restart: always
     volumes:
       - ./data/db/:/home/db
     environment:
