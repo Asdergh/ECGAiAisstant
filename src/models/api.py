@@ -8,10 +8,9 @@ import wfdb                                           # чтение .hea/.dat
 import uvicorn
 import zipfile
 
-from config import MISTRAL_URL
 
 config = {
-        "signal_analytic": {
+        "ConvAttNet": {
             "backbone": {
                 "projection": {
                     "in_channels":   [12, 32, 64  ],
@@ -37,31 +36,7 @@ config = {
                 }
             }
         },
-        "generation_config": {
-            "max_new_tokens": 200,
-            "temperature": 0.7,
-            "top_p": 0.9,
-            "repetition_penalty": 1.1,
-            "do_sample": True,
-            "num_return_sequences": 1
-        },
-        "gen_details": {
-            "роль": "Ты помощник медицинского эксперта",
-            "задача": """
-                Ты должен генерировать промежуточные диагнозы на 
-                основании диагнозов параметров экг таких как 
-                RR, PR, QT, QRS, которые ты будешь получать 
-                в формате текста но в виде list.
-            """,
-            "результат": """
-                Текст с полным описанием экг пациента по 
-                RR, PR, QT, QRS, дополнительными рекомендациями
-                от себя, и предупрежедением о том что ты лишь 
-                ИИ ассистент и пользователю стоит обратиться за 
-                более точной консультацией к медработнику. 
-                Все поля раздели между собой линиями.
-            """
-        }
+        "system_message": "Вы — помощник диагноста ЭКГ для создания временных диагнозов"
     }
 
 # инициализируем один раз при старте контейнера
@@ -114,7 +89,7 @@ async def analyze_ecg(file: UploadFile = File(...)):
         base_path = os.path.join(tmpdir, hea_name)
 
         try:
-            report = pipeline(base_path, MISTRAL_URL=MISTRAL_URL)
+            report = pipeline(base_path)
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc))
 

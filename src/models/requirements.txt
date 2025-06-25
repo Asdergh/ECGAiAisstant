@@ -1,5 +1,5 @@
-torch==2.2.2+cpu --index-url https://download.pytorch.org/whl/cpu
-torchvision==0.17.2+cpu --index-url https://download.pytorch.org/whl/cpu
+torch~=2.4.1
+torchvision~=0.19.1
 PyYAML~=6.0.2
 wfdb~=4.1.2
 requests~=2.32.3
