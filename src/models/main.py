@@ -3,11 +3,13 @@ import os
 import json
 import wfdb as wf
 import requests 
+import zipfile as zip
+import PIL
+import matplotlib.pyplot as plt
+plt.style.use("dark_background")
+
 from collections import OrderedDict
-
-
-from typing import Union, BinaryIO, IO, List
-
+from typing import Union, List
 from conv_attention_model import *
 from config import *
 from utils import *
@@ -25,10 +27,12 @@ class PipeLine:
     def __init__(
         self, 
         config: Union[str, dict, List[str]],
-        weights: Union[str, OrderedDict]=None
+        weights: Union[str, OrderedDict]=None,
+        local_storage: str="meta_local"
     ) -> None:
 
         self.config = config
+        self.local_storage = local_storage
         if isinstance(self.config, str):
             with open(self.config, "r") as file:
                 self.config = js.load(file)
@@ -58,6 +62,46 @@ class PipeLine:
             self._messages_.append(SystemMessage(content=self.config["system_message"]))
     
 
+   
+    def _parse_ecg(
+        self, 
+        path: str, 
+        records_n: int=3, 
+        sampling_rate: float=1e-4
+    ) -> None:
+        
+        ecg_path = os.path.join(self.local_storage, "ecg_records")
+        if not os.path.exists(ecg_path):
+             os.mkdir(ecg_path)
+
+        if os.listdir(ecg_path) != 0:
+            for f in os.listdir(ecg_path):
+                fpath = os.path.join(ecg_path, f)
+                os.remove(fpath)
+        
+        zip.ZipFile(path).extractall(ecg_path)
+        for content in os.listdir(ecg_path):
+            fnt = content.split(".")
+            if fnt[-1] in ["hea", "dat"]:
+                fpath = os.path.join(ecg_path, fnt[0])
+                break
+        
+        signals = wf.rdrecord(fpath).p_signal.T
+        if records_n > signals.shape[0]:
+            records_n = signals.shape[0]
+        
+        n_samples = int(signals.shape[-1] * sampling_rate)
+        signals = signals[:records_n, :n_samples]
+        fig, axis = plt.subplots(nrows=records_n)
+        for idx in range(records_n):
+            signal = signals[idx]
+            axis[idx].plot(signal, color=np.random.rand(3), label=f"record{idx}")
+            axis[idx].legend(loc="upper left")
+        
+        fimg = os.path.join(ecg_path, "records_plot.png")
+        fig.savefig(fimg)
+
+        
     def __call__(self, path: str) -> str:
         print("STARTED")
         signal = wf.rdrecord(path).p_signal
