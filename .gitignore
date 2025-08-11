@@ -5,7 +5,7 @@ reserch_conv_att.ipynb
 reserch_token_generator.ipynb
 src/models/config.py
 
-
+/data/media/ecg_files/*.zip
 
 
 # Python bytecode

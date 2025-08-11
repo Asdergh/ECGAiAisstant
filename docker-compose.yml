@@ -34,6 +34,7 @@ services:
     restart: always
     volumes:
       - ./data/db/:/home/db
+      - ./data/media:/home/media
     environment:
       - ECG_SERVICE_URL=http://ecg_service:8000
     depends_on:
