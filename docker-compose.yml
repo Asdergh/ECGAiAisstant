@@ -2,13 +2,18 @@ version: '2.2'
 
 services:
   ecg_service:
+    mem_limit: 400m
+    memswap_limit: 600m
+    cpus: "1.0"
+    environment:
+      - OMP_NUM_THREADS=1
+      - MKL_NUM_THREADS=1
+      - OPENBLAS_NUM_THREADS=1
     build:
       context: src/models
       dockerfile: Dockerfile
     command: >
       sh -c "python3 api.py"
-#    environment:
-
     restart: always
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/healthz" ]
