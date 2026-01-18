@@ -1,3 +1,6 @@
 [submodule "src/app/ecgAIWeb"]
 	path = src/app/ecgAIWeb
 	url = https://github.com/Cheburek28/ecgAIWeb.git
+[submodule "src/models/submodules/neural_ode"]
+	path = src/models/submodules/neural_ode
+	url = https://github.com/rtqichen/torchdiffeq.git

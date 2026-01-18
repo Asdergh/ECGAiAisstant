@@ -10,7 +10,7 @@ plt.style.use("dark_background")
 
 from collections import OrderedDict
 from typing import Union, List
-from conv_attention_model import *
+from models.depricated.conv_attention_model import *
 from config import *
 from utils import *
 

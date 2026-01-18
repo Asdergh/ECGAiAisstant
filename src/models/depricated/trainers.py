@@ -8,7 +8,7 @@ from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 
-from attention_text_generator import AttEmbnedding
+from models.depricated.attention_text_generator import AttEmbnedding
 
 
 

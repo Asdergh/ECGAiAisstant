@@ -4,6 +4,8 @@ src/models/test
 reserch_conv_att.ipynb
 reserch_token_generator.ipynb
 src/models/config.py
+src/models/only_research_requirements.txt
+src/models/encoders/test.py
 
 /data/media/ecg_files/*.zip
 
