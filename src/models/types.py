@@ -7,7 +7,7 @@ from typing import (
     NamedTuple
 )
 from torchtyping import TensorType
-from dataclasses import (dataclass, field)
+from dataclasses import (dataclass, field, is_dataclass)
 
 
 
@@ -17,7 +17,8 @@ __all__ = [
     "List", "Dict",
     "Any", "Tuple",
     "ImageTensor", "SequenceTensor",
-    "dataclass", "field"
+    "dataclass", "field",
+    "is_dataclass"
 ]
 ImageTensor = TensorType["B", "C", "W", "H"]
 SequenceTensor = TensorType["B", "N", "C"]

@@ -1,0 +1,38 @@
+base:
+  num_heads: 4
+  apply_last_normalization: true
+  randomize_normaliation: true
+  output_features_size: 312
+  attention_activation: tanh
+lstm-sequential-encoder:
+  input_features: ???
+  name: lstm-sequential-encoder
+  data_domain: temporal
+  hiden_features_size: 128
+  activation: sigmoid
+  normalization: true
+  random_normalization: true
+  num_layers: 10
+  add_bias: true
+  bidirectional: false
+vit-visual-encoder:
+  name: vit-visual-encoder
+  data_domain: visual
+  input_type: signal
+  image_size:
+  - 224
+  - 112
+  patch_size:
+  - 16
+  - 16
+  num_transformer_blocks: 4
+  out_hidden_indices:
+  - 0
+  - 1
+  - 2
+  embeddings_size: 128
+  hidden_features_size: 128
+  backbone_activation: tanh
+  transformer_activation: relu
+  attention_activation: sigmoid
+  attention_pool_scale: 2

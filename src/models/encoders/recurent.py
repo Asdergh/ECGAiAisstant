@@ -2,76 +2,57 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .base import (register_encoder, get_activation)
+from .registry import (
+    register_encoder, 
+    get_activation, 
+    RecurrentEncoderConfig
+)
 from ..types import *
 
 
 
-
+print("RECURENT FILE IF DEBUGED")
 class RecurrentEncoderOutput(NamedTuple):
     last_activation: SequenceTensor
     last_activation_normalized: SequenceTensor
     last_cell_activation: SequenceTensor
     last_hid_activation: SequenceTensor
 
-@dataclass
-class RecurrentEncoderConfig:
-    input_features: int
-    hiden_features_size: Optional[int]=128
-    activation: Optional[str]="sigmoid"
-    normalization: Optional[bool]=True
-    random_normalization: Optional[bool]=True
-    num_layers: Optional[int]=10
-    add_bias: Optional[bool]=True
-    bidirectional: Optional[bool]=False
 
-
-_RECURRENT_ENCODER_CONFIGURATIONS = {
-    "tiny": RecurrentEncoderConfig(
-        input_features=10000,
-        hiden_features_size=312,
-        normalization=True,
-        random_normalization=True,
-        num_layers=3,
-        bidirectional=False
-    ),
-    "big":  RecurrentEncoderConfig(
-        input_features=128,
-        hiden_features_size=512,
-        normalization=True,
-        random_normalization=True,
-        num_layers=6,
-        bidirectional=False
-    ),
-    "large":  RecurrentEncoderConfig(
-        input_features=128,
-        hiden_features_size=718,
-        normalization=True,
-        random_normalization=True,
-        num_layers=10,
-        bidirectional=False
-    ),
-}
 
 
 class AdaptiveLayerNormalization(nn.Module):
-    def __init__(self, cfg: RecurrentEncoderConfig) -> None:
+    def __init__(
+        self, 
+        hiden_features_size: Optional[int]=None,
+        normal_randomization: Optional[bool]=False,
+        cfg: Optional[RecurrentEncoderConfig]=None
+    ) -> None:
+        
         super(AdaptiveLayerNormalization, self).__init__()
         self.cfg = cfg
+        if self.cfg is not None:
+            self.C = self.cfg.hiden_features_size
+            randomize = self.cfg.random_normalization
+        else:
+            self.C = hiden_features_size
+            randomize = normal_randomization
 
-        self.shift = nn.Parameter(torch.zeros(self.cfg.hiden_features_size))
-        self.scale = nn.Parameter(torch.ones(self.cfg.hiden_features_size))
-        if self.cfg.random_normalization:
+        assert (self.C is not None), \
+        ("ither hiden_features or general model config must be passed")
+
+        self.shift = nn.Parameter(torch.zeros(self.C))
+        self.scale = nn.Parameter(torch.ones(self.C))
+        if randomize:
             nn.init.normal_(self.shift, 0.0, 1.0)
             nn.init.normal_(self.scale, 0.0, 1.0)
     
     def forward(self, input: SequenceTensor) -> SequenceTensor:
-        C = self.cfg.hiden_features_size
-        features = self.scale.view(1, 1, C) * input + self.shift.view(1, 1, C)
+        features = self.scale.view(1, 1, self.C) * input + self.shift.view(1, 1, self.C)
         features = F.sigmoid(features)
         return features
 
-@register_encoder("lstm-encoder")
+@register_encoder("lstm-sequential-encoder")
 class RecurrentEncoder(nn.Module):
     def __init__(self, cfg: RecurrentEncoderConfig) -> None:
         super(RecurrentEncoder, self).__init__()
@@ -83,7 +64,7 @@ class RecurrentEncoder(nn.Module):
                             bias=self.cfg.add_bias)
         self.act = get_activation(self.cfg.activation)
         if self.cfg.normalization:
-            self.adanorm = AdaptiveLayerNormalization(cfg)
+            self.adanorm = AdaptiveLayerNormalization(cfg=cfg)
         
     def forward(self, input: SequenceTensor) -> RecurrentEncoderOutput:
         
