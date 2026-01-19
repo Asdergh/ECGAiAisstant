@@ -4,29 +4,17 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from copy import deepcopy
-from .base import register_encoder
+from .base import (register_encoder, get_activation)
 from ..types import *
 
 
 
 
-_ACTIVATIONS = {
-    "tanh": nn.Tanh,
-    "sigmoid": nn.Sigmoid,
-    "softmax": nn.Softmax,
-    "relu": nn.ReLU,
-    "gelu": nn.GELU,
-}
-get_activation = lambda activation: (
-    nn.Identity() if activation not in _ACTIVATIONS
-    else _ACTIVATIONS[activation](dim=-1) if activation == "softmax"
-    else _ACTIVATIONS[activation]()
-)
+
 _IN_CHANNELS = {
     "image": 3,
     "signal": 1
 }
-
 
 class VITBlockOutput(NamedTuple):
     features: PatchTensor
@@ -249,6 +237,17 @@ class VITTransformer(nn.Module):
                                 attention_activations)
                 
         
+
+# if __name__ == "__main__":
+
+#     cfg = _VIT_CONFIGURATIONS["tiny"]
+#     model = VITTransformer(cfg)
+#     test = torch.normal(0, 1, (10, 1, *cfg.image_size))
+    
+#     output = model(test)
+#     spatial_tensors = output.get_spatial_tokens
+#     print(output.last_activation.size(), spatial_tensors.last_activation.size())
+    
 
 
         

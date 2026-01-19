@@ -6,6 +6,20 @@ from ..types import *
 from functools import wraps
 
 
+
+_ACTIVATIONS = {
+    "tanh": nn.Tanh,
+    "sigmoid": nn.Sigmoid,
+    "softmax": nn.Softmax,
+    "relu": nn.ReLU,
+    "gelu": nn.GELU,
+}
+get_activation = lambda activation: (
+    nn.Identity() if activation not in _ACTIVATIONS
+    else _ACTIVATIONS[activation](dim=-1) if activation == "softmax"
+    else _ACTIVATIONS[activation]()
+)
+
 _ENCODERS_REGISTRY = {}
 def register_encoder(name: str):
     def decorator(cls: Any) -> Any:
