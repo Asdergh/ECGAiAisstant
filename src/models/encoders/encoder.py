@@ -5,14 +5,15 @@ import torch.nn.functional as F
 from itertools import permutations
 
 from omegaconf import OmegaConf
-from .registry import ( 
-    load_model, 
-    load_configs, 
-    get_activation
-)
-from .registry import GeneralEncoderConfig, register_config, _CONFIGS_REGISTRY
+from .registry import GeneralEncoderConfig
 from .recurent import (RecurrentEncoderConfig, AdaptiveLayerNormalization)
 from .visual import (VITTransformerConfig, VITSelfAttention)
+from .registry import ( 
+    load_model,  
+    get_activation,
+    register_config,
+    GeneralEncoderConfig
+)
 from ..types import *
 from itertools import product
 
@@ -24,28 +25,32 @@ class ECGEncoderOutput(NamedTuple):
 
 
 
+
+@register_config("base")
+@dataclass
+class ECGEncoderConfig:
+    name: Optional[str]="base"
+    num_heads: Optional[int]=4
+    encoder2include: Optional[List[str]]=field(default_factory=lambda: [
+        "lstm-sequential-encoder", 
+        "vit-visual-encoder"
+    ])
+    apply_last_normalization: Optional[bool]=True
+    randomize_normaliation: Optional[bool]=True
+    output_features_size: Optional[int]=312
+    attention_activation: Optional[str]="tanh"
+
 class ECGEncoder(nn.Module):
-    def __init__(self, base_cfg, encoders_cfg: Dict[str, Any]) -> None:
+    def __init__(self, general_cfg: GeneralEncoderConfig) -> None:
         super(ECGEncoder, self).__init__()
-        self.cfg = base_cfg
 
-        (seq_encoders_cfg, vis_encoders_cfg) = load_configs(encoders_cfg)
-        hiden_sizes = set([cfg.hiden_features_size for cfg in seq_encoders_cfg.values()] + 
-                          [cfg.hidden_features_size for cfg in vis_encoders_cfg.values()])
-        assert len(hiden_sizes) == 1, \
-        (f"not all models have the same hiden features dimentions: {hiden_sizes}")
-        hiden_d = hiden_sizes.pop()
+        self.base_cfg = general_cfg.load_config["base"]
+        configs = general_cfg.get_configs(self.base_cfg.encoder2include)
+        self.sequential_models = {cfg.name: load_model(cfg) for cfg in configs["sequential"]}
+        self.visual_models = {cfg.name: load_model(cfg) for cfg in configs["visual"]}
 
-        self.sequential_encoders = nn.ModuleDict({
-            key: load_model(cfg, key) 
-            for (key, cfg) in seq_encoders_cfg.items()
-        })
-        num_seq_m = len(self.sequential_encoders)
-        self.visual_encoders = nn.ModuleDict({
-            key: load_model(cfg, key) 
-            for (key, cfg) in vis_encoders_cfg.items()
-        })
-        num_vis_m = len(self.visual_encoders)
+        hiden_d = self.check_hiden_dims(configs["sequential"], configs["visual"])
+        (num_seq_m, num_vis_m) = (len(self.sequential_models), len(self.visual_models)) 
         self.features = nn.Sequential(
             nn.Linear(num_seq_m * num_vis_m * hiden_d, self.cfg.output_features_size),
             get_activation("sigmoid")
@@ -57,6 +62,17 @@ class ECGEncoder(nn.Module):
                 hiden_features_size=hiden_d
             ) for _ in range(num_seq_m * num_seq_m)
         ])
+    
+    def check_hiden_dims(self, sq_cfgs: Dict[str, Any], vis_cfgs: Dict[str, Any]):
+
+        hiden_sizes = set([cfg.hiden_features_size for cfg in sq_cfgs] + 
+                          [cfg.hiden_featuers_size for cfg in vis_cfgs])
+        assert (len(hiden_sizes) == 1), \
+        ("the hiden sizes nfrof different models are not the same")
+        return hiden_sizes.pop() 
+    
+    # def _load_models(self, config) -> Tuple[nn.ModuleDict, nn.ModuleDict]:
+        
     
     def forward(self, signal: SequenceTensor, spec: ImageTensor) -> ECGEncoderOutput:
         
@@ -90,9 +106,8 @@ class ECGEncoder(nn.Module):
 if __name__ == "__main__":
 
     config = GeneralEncoderConfig()
-    print(_CONFIGS_REGISTRY)
-    config.build_config()
-    config.save_config("test.yaml")        
+    model = ECGEncoder(config)
+    # config.save_config("test.yaml")        
 
 # if __name__ == "__main__":
 

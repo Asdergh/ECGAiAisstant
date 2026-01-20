@@ -8,7 +8,7 @@ import numpy as np
 
 from tensorflow.keras.preprocessing.text import Tokenizer
 from torch.utils.data import Dataset, DataLoader
-from utils import convert_to_spec, convert_to_wavelet
+from models.add_utils import convert_to_spec, convert_to_wavelet
 
 
 class SignalsSet(Dataset):

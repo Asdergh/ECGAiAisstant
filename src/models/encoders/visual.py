@@ -7,16 +7,11 @@ from copy import deepcopy
 from .registry import (
     register_encoder, 
     get_activation,  
-    VITTransformerConfig
+    register_config
 )
 from ..types import *
 
 
-
-
-
-
-print("VISUAL FILE IS DEBUGED")
 _IN_CHANNELS = {
     "image": 3,
     "signal": 1
@@ -26,7 +21,24 @@ class VITBlockOutput(NamedTuple):
     features: PatchTensor
     film_norm: PatchTensor
     attention: PatchTensor
-    
+
+
+@register_config("vit-visual-encoder")
+@dataclass
+class VITTransformerConfig:
+    name: Optional[str]="vit"
+    data_domain: Optional[str]="visual"
+    input_type: Optional[str]="signal"
+    image_size: Tuple[int, int]=(224, 112)
+    patch_size: Tuple[int, int]=(16, 16)
+    num_transformer_blocks: Optional[int]=4
+    out_hidden_indices: Optional[List[int]]=field(default_factory=lambda: [0, 1, 2])
+    embeddings_size: Optional[int]=128
+    hidden_features_size: Optional[int]=128
+    backbone_activation: Optional[str]="tanh"
+    transformer_activation: Optional[str]="relu"
+    attention_activation: Optional[str]="sigmoid"
+    attention_pool_scale: Optional[int]=2
 
 @dataclass
 class VITTransformerOutput:
@@ -158,7 +170,7 @@ class VITSelfAttention(nn.Module):
 
 
 
-@register_encoder("vit-visual-encoder")
+
 class VITTransformerBlock(nn.Module):
     def __init__(self, cfg: VITTransformerConfig) -> None:
         super(VITTransformerBlock, self).__init__()
@@ -191,7 +203,7 @@ class VITTransformerBlock(nn.Module):
         
         
 
-
+@register_encoder("vit")
 class VITTransformer(nn.Module):
     def __init__(self, cfg: VITTransformerConfig) -> None:
         super(VITTransformer, self).__init__()

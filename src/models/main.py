@@ -12,7 +12,7 @@ from collections import OrderedDict
 from typing import Union, List
 from models.depricated.conv_attention_model import *
 from config import *
-from utils import *
+from models.add_utils import *
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_gigachat.chat_models import GigaChat

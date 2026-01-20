@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from .registry import (
     register_encoder, 
     get_activation, 
-    RecurrentEncoderConfig
+    register_config
 )
 from ..types import *
 
@@ -20,6 +20,21 @@ class RecurrentEncoderOutput(NamedTuple):
 
 
 
+@register_config("lstm-sequential-encoder")
+@dataclass
+class RecurrentEncoderConfig:
+    input_features: Optional[int]=None
+    name: Optional[str]="lstm"
+    data_domain: Optional[str]="temporal"
+    hiden_features_size: Optional[int]=128
+    activation: Optional[str]="sigmoid"
+    normalization: Optional[bool]=True
+    random_normalization: Optional[bool]=True
+    num_layers: Optional[int]=10
+    add_bias: Optional[bool]=True
+    bidirectional: Optional[bool]=False
+
+
 
 class AdaptiveLayerNormalization(nn.Module):
     def __init__(
@@ -28,7 +43,6 @@ class AdaptiveLayerNormalization(nn.Module):
         normal_randomization: Optional[bool]=False,
         cfg: Optional[RecurrentEncoderConfig]=None
     ) -> None:
-        
         super(AdaptiveLayerNormalization, self).__init__()
         self.cfg = cfg
         if self.cfg is not None:
@@ -52,7 +66,7 @@ class AdaptiveLayerNormalization(nn.Module):
         features = F.sigmoid(features)
         return features
 
-@register_encoder("lstm-sequential-encoder")
+@register_encoder("lstm")
 class RecurrentEncoder(nn.Module):
     def __init__(self, cfg: RecurrentEncoderConfig) -> None:
         super(RecurrentEncoder, self).__init__()

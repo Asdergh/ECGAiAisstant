@@ -15,81 +15,110 @@ def register_config(name: str) -> Any:
         if name in _CONFIGS_REGISTRY:
             raise KeyError("{name} already in configs registry")
         _CONFIGS_REGISTRY[name] = cls
-        print("reg worked")
         return cls
     return decorator
 
 @dataclass 
 class GeneralEncoderConfig:
-    _configs2include: List[str]=field(default_factory=lambda: ["lstm-sequential-encoder", 
-                                                       "vit-visual-encoder", 
-                                                       "base"])
+    loaded_configs: Dict[str, Dict[str, Any]]=field(default_factory=lambda: {
+        "sequential": {}, 
+        "visual": {},
+        "base": {}
+    })
+    
+    def __post_init__(self) -> None:
+        self.build_config()
 
-    def build_config(self, configs2include: Optional[List[str]]=None) -> None:
-        if configs2include is not None:
-            self._configs2include = list(set(self._configs2include + configs2include))
-        for name in self._configs2include:
-            cfg = _CONFIGS_REGISTRY[name]
-            setattr(self, name.replace("-", "_"), cfg)
-            print(hasattr(self, name))
+    def get_configs(self, configs2get: List[str]) -> Dict[str, Any]:
+        configs = {}
+        configs.update({"sequential": [
+            cfg 
+            for (name, cfg) in self.loaded_configs["sequential"].items()
+            if name in configs2get
+        ]})
+        configs.update({"visual": [
+            cfg 
+            for (name, cfg) in self.loaded_configs["visual"].items()
+            if name in configs2get
+        ]})
+        configs.update({"base": self.loaded_configs["base"]})
+        return configs
+
+    def _back2structured(self, name, dict_cfg) -> Any:
+        return _CONFIGS_REGISTRY[name](**dict_cfg)
     
-    def save_config(self, path: str) -> None:
-        config = OmegaConf.merge({
-            name: OmegaConf.structured(cfg)
-            for (name, cfg) in _CONFIGS_REGISTRY.items()
-        })
-        OmegaConf.save(config, path)
-    
-    def load_config(self, path: str) -> None:
-        config = OmegaConf.load(path)
-        for (name, cfg) in config.items():
-            if name not in self._configs2include:
+    def build_config(self) -> None:
+        for (name, cfg) in _CONFIGS_REGISTRY.items():
+            if name == "base":
                 continue
-            cfg = _CONFIGS_REGISTRY[name](**cfg)
-            cfg = OmegaConf.structured(cfg)
-            setattr(self, name, cfg) 
+            type = name.split("-")[1]
+            self.loaded_configs[type].update({name: cfg})
+        
+        cfg = _CONFIGS_REGISTRY["base"]
+        self.loaded_configs.update({"base": cfg})
+    
+    def save_config(self, path: str, split_mode: Optional[bool]=False) -> None:
+        if not split_mode:
+            config_part = lambda cfg_type: {
+                name.replace("-", "_"): OmegaConf.structured(cfg)
+                for (name, cfg) in self.loaded_configs[cfg_type].items()
+            }
+            config = OmegaConf.merge({
+                "sequential": config_part("sequential"), 
+                "visual": config_part("visual"),
+                "base": OmegaConf.structured(self.loaded_configs["base"])
+            })
+            OmegaConf.save(config, path)
+        
+        else:
+            assert ("." not in path), \
+            (f"try to use split_mode: False for types like: {path}")
+            if not os.path.exists(path):
+                os.mkdir(path)
+
+            for (name, cfg) in list(self.loaded_configs["sequential"].items()) \
+                    + list(self.loaded_configs["visual"].items()) \
+                    + [("base", self.loaded_configs["base"]), ]:
+                file = os.path.join(path, f"{name.replace("-", "_")}.yaml")
+                print(file)
+                cfg = OmegaConf.structured(cfg)
+                OmegaConf.save(cfg, file)
+            
+
+    def load_config(self, source: Union[str, List[str]]) -> None:
+        source_isfile = False
+        if isinstance(source, str) and (os.path.isfile(source)):
+            config = OmegaConf.load(source)
+            self.loaded_configs["sequential"] = {
+                name.replace("_", "-"): self._back2structured(name.replace("_", "-"), cfg) 
+                for (name, cfg) in config.sequential.items()
+            }
+            self.loaded_configs["visual"] = {
+                name.replace("_", "-"): self._back2structured(name.replace("_", "-"), cfg) 
+                for (name, cfg) in config.visual.items()
+            }
+            self.loaded_configs["base"] = self._back2structured("base", config.base)
+            source_isfile = True
+        
+        elif isinstance(source, list) or (not source_isfile):
+            if not source_isfile:
+                source = [os.path.join(source, file) for file in os.listdir(source)]
+            for path in source:
+                fname = os.path.basename(path).split(".")[0]
+                if "base" not in fname:
+                    fname = fname.replace("_", "-")
+                cfg = self._back2structured(fname, OmegaConf.load(path))
+                self.loaded_configs.update({fname: cfg})
+                
 
 
-@register_config("base")
-@dataclass
-class ECGEncoderConfig:
-    num_heads: Optional[int]=4
-    apply_last_normalization: Optional[bool]=True
-    randomize_normaliation: Optional[bool]=True
-    output_features_size: Optional[int]=312
-    attention_activation: Optional[str]="tanh"
 
 
-@register_config("lstm-sequential-encoder")
-@dataclass
-class RecurrentEncoderConfig:
-    input_features: int
-    name: Optional[str]="lstm-sequential-encoder"
-    data_domain: Optional[str]="temporal"
-    hiden_features_size: Optional[int]=128
-    activation: Optional[str]="sigmoid"
-    normalization: Optional[bool]=True
-    random_normalization: Optional[bool]=True
-    num_layers: Optional[int]=10
-    add_bias: Optional[bool]=True
-    bidirectional: Optional[bool]=False
 
-@register_config("vit-visual-encoder")
-@dataclass
-class VITTransformerConfig:
-    name: Optional[str]="vit-visual-encoder"
-    data_domain: Optional[str]="visual"
-    input_type: Optional[str]="signal"
-    image_size: Tuple[int, int]=(224, 112)
-    patch_size: Tuple[int, int]=(16, 16)
-    num_transformer_blocks: Optional[int]=4
-    out_hidden_indices: Optional[List[int]]=field(default_factory=lambda: [0, 1, 2])
-    embeddings_size: Optional[int]=128
-    hidden_features_size: Optional[int]=128
-    backbone_activation: Optional[str]="tanh"
-    transformer_activation: Optional[str]="relu"
-    attention_activation: Optional[str]="sigmoid"
-    attention_pool_scale: Optional[int]=2
+
+
+
+
 
 
    
@@ -117,48 +146,15 @@ def register_encoder(name: str):
         return cls
     return decorator
 
-
-def load_configs(configs: Union[str, List[str]]):
-    if isinstance(configs, str):
-        configs = [
-            os.path.join(configs, fname) 
-            for fname in os.path.listdir(configs) 
-            if "encoder" in fname
-        ]
-    
-    build_cfg = lambda cfg: (
-        OmegaConf.load(cfg) 
-        if isinstance(cfg, str)
-        else OmegaConf.structured(cfg)
-    )
-    sequential_encoders_cfg = {}
-    visual_encoders_cfg = {}
-    for config in configs:
-        cfg = build_cfg(config)
-        if "sequential" in cfg.name:
-            sequential_encoders_cfg.update({cfg.name: cfg})
-        elif "visual" in cfg.name:
-            visual_encoders_cfg.update({cfg.name: cfg})
-        else:
-            raise TypeError(f"unknown config type for encoders: {cfg.name}")
-    
-    return (sequential_encoders_cfg, visual_encoders_cfg)
-
-def load_model(config: Union[str, Any], key: Optional[str]=None) -> nn.Module:
-
+def load_model(config: Union[str, Any]) -> nn.Module:
     if isinstance(config, str):
         config = OmegaConf.load(config)
-    name = (key if key is not None else config.name)
-    return _ENCODERS_REGISTRY[name](config)
+    return _ENCODERS_REGISTRY[config.name](config)
 
 
-if __name__ == "__main__":
 
-    config = GeneralEncoderConfig()
-    print(_CONFIGS_REGISTRY)
-    config.build_config()
-    config.save_config("test.yaml")
-    print(config.base, config.lstm_sequential_encoder)
+
+
 
 
 
