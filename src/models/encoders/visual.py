@@ -23,51 +23,52 @@ class VITBlockOutput(NamedTuple):
     attention: PatchTensor
 
 
-@register_config("vit-visual-encoder")
+@register_config("vit", "visual")
 @dataclass
 class VITTransformerConfig:
     name: Optional[str]="vit"
     data_domain: Optional[str]="visual"
     input_type: Optional[str]="signal"
-    image_size: Tuple[int, int]=(224, 112)
+    image_size: Tuple[int, int]=(112, 224)
     patch_size: Tuple[int, int]=(16, 16)
     num_transformer_blocks: Optional[int]=4
     out_hidden_indices: Optional[List[int]]=field(default_factory=lambda: [0, 1, 2])
     embeddings_size: Optional[int]=128
-    hidden_features_size: Optional[int]=128
+    hiden_features_size: Optional[int]=128
+    out_features_size: Optional[int]=None
     backbone_activation: Optional[str]="tanh"
     transformer_activation: Optional[str]="relu"
     attention_activation: Optional[str]="sigmoid"
     attention_pool_scale: Optional[int]=2
 
-@dataclass
-class VITTransformerOutput:
-    patches_n: Tuple[int, int]
-    last_activation: SequenceTensor
-    intermediate_activations: List[SequenceTensor]
-    attention_activations: List[SequenceTensor]
+# @dataclass
+# class VITTransformerOutput:
+#     patches_n: Tuple[int, int]
+#     last_activation: SequenceTensor
+#     intermediate_activations: List[SequenceTensor]
+#     attention_activations: List[SequenceTensor]
     
     
-    def _sequence2spatial(self, tokens: PatchTensor) -> PatchTensor:
-        tokens = tokens.transpose(-1, -2)
-        spatial_tokens = tokens.view(*tokens.shape[:-1], *self.patches_n)
-        return spatial_tokens
+#     def _sequence2spatial(self, tokens: PatchTensor) -> PatchTensor:
+#         tokens = tokens.transpose(-1, -2)
+#         spatial_tokens = tokens.view(*tokens.shape[:-1], *self.patches_n)
+#         return spatial_tokens
 
 
-    @property
-    def get_spatial_tokens(self):
-        return VITTransformerOutput(
-            patches_n=self.patches_n,
-            last_activation=self._sequence2spatial(self.last_activation),
-            intermediate_activations=[
-                self._sequence2spatial(val) 
-                for val in self.intermediate_activations
-            ],
-            attention_activations=[
-                self._sequence2spatial(val)
-                for val in self.attention_activations
-            ]
-        )
+#     @property
+#     def get_spatial_tokens(self):
+#         return VITTransformerOutput(
+#             patches_n=self.patches_n,
+#             last_activation=self._sequence2spatial(self.last_activation),
+#             intermediate_activations=[
+#                 self._sequence2spatial(val) 
+#                 for val in self.intermediate_activations
+#             ],
+#             attention_activations=[
+#                 self._sequence2spatial(val)
+#                 for val in self.attention_activations
+#             ]
+#         )
         
 
 class PatchEmbedder(nn.Module):
@@ -78,7 +79,7 @@ class PatchEmbedder(nn.Module):
                 and (self.cfg.image_size[1] % self.cfg.patch_size[1]) == 0), \
                 (f"images dims: [{self.cfg.image_size}] must be dividable to patch dims: [{self.cfg.patch_size}]")
         
-        C = self.cfg.hidden_features_size
+        C = self.cfg.hiden_features_size
         self.embeddings = nn.Conv2d(_IN_CHANNELS[self.cfg.input_type], 
                                    C, 1, self.cfg.patch_size, 0)
         self.features = nn.Sequential(
@@ -88,9 +89,12 @@ class PatchEmbedder(nn.Module):
     
     def forward(self, input: ImageTensor) -> SequenceTensor:
         x = input
+        print("Embedder")
+        print(x.size())
         spatial_embeddings = self.embeddings(x)
         sequence_embedding = torch.flatten(spatial_embeddings, -2).permute(0, 2, 1)
         features = self.features(sequence_embedding)
+        print(features.size())
         return features
 
 
@@ -108,13 +112,18 @@ class VITSelfAttention(nn.Module):
         self.cfg = cfg
         
         if self.cfg is not None:
-            self.C = self.cfg.hidden_features_size
+            self.C = (
+                hiden_features_size
+                if hiden_features_size is not None
+                else self.cfg.hiden_features_size
+            )
             activation_fn = self.cfg.attention_activation
             self.attention_pool = self.cfg.attention_pool_scale
             self.patches_n = (self.cfg.image_size[0] // self.cfg.patch_size[0], 
                               self.cfg.image_size[1] // self.cfg.patch_size[1])
         else:
             self.C = hiden_features_size
+            # print(self.C)
             self.attention_pool = attention_pool_scale
             self.patches_n = patches_n
 
@@ -142,13 +151,14 @@ class VITSelfAttention(nn.Module):
         
         key = (quary if key is None else key)
         value = (key if value is None else value)
-        Q, K, V = (
-            self._sequence2spatial(self.quary(quary)), 
-            self._sequence2spatial(self.key(key)), 
-            self._sequence2spatial(self.value(value))
-        )
+        Q, K, V = (self.quary(quary), self.key(key),  self.value(value))
         if (self.attention_pool is not None) \
             and (self.patches_n is not None):
+            Q, K, V = (
+                self._sequence2spatial(Q), 
+                self._sequence2spatial(K), 
+                self._sequence2spatial(V)
+            )
             q = F.avg_pool2d(Q, (self.attention_pool, 1))
             k = F.avg_pool2d(K, (self.attention_pool, 1))
             
@@ -163,27 +173,44 @@ class VITSelfAttention(nn.Module):
             return self._spatial2sequence(QkKqv)
 
         else:
-            QK = self.d_scale * torch.einsum("nik, nkj -> nij", Q, K)
+            QK = self.d_scale * torch.einsum("nik, nkj -> nij", Q, K.transpose(-1, -2))
             weights = F.softmax(QK, dim=-1)
             QKV = torch.einsum("nik, nkj -> nij", weights, V)
-            return self._spatial2sequence(QKV)
-
-
+            return QKV
 
 
 class VITTransformerBlock(nn.Module):
-    def __init__(self, cfg: VITTransformerConfig) -> None:
+    def __init__(
+        self, 
+        cfg: Optional[VITTransformerConfig]=None,
+        input_features_size: Optional[int]=None,
+        out_features_size: Optional[int]=None
+    ) -> None:
         super(VITTransformerBlock, self).__init__()
         self.cfg = cfg
-
-        self.C = self.cfg.hidden_features_size
-        self.attention = VITSelfAttention(cfg=cfg)
-        self.features = nn.Sequential(nn.Linear(self.C, self.C), get_activation(self.cfg.transformer_activation))
-        self.adaptive_norm = nn.Sequential(nn.Linear(self.C, 2*self.C), get_activation("sigmoid"))
-        self.norm = nn.LayerNorm(self.C)
+        
+        if self.cfg is not None:
+            self.Ic = (
+                input_features_size
+                if input_features_size is not None
+                else self.cfg.hiden_features_size
+            )
+            Oc = (
+                out_features_size
+                if out_features_size is not None
+                else cfg.hiden_features_size
+            )
+        else:
+            self.Ic = input_features_size
+            Oc = (self.Ic if out_features_size is None else out_features_size)
+        
+        self.attention = VITSelfAttention(hiden_features_size=self.Ic, cfg=self.cfg)
+        self.features = nn.Sequential(nn.Linear(self.Ic, Oc), get_activation(self.cfg.transformer_activation))
+        self.adaptive_norm = nn.Sequential(nn.Linear(self.Ic, 2*Oc), get_activation("sigmoid"))
+        self.norm = nn.LayerNorm(Oc)
     
     def _normalize(self, tokens: SequenceTensor) -> SequenceTensor:
-        (scale, shift) = self.adaptive_norm(tokens).view(*tokens.shape[:-1], self.C, 2).unbind(dim=-1)
+        (scale, shift) = self.adaptive_norm(tokens).view(*tokens.shape[:-1], self.Ic, 2).unbind(dim=-1)
         normalized_tokens = scale * tokens + shift
         return normalized_tokens
     
@@ -209,15 +236,21 @@ class VITTransformer(nn.Module):
         super(VITTransformer, self).__init__()
         self.cfg = cfg
 
-        (Pw, Ph) = (self.cfg.image_size[0] // self.cfg.patch_size[0], 
-                    self.cfg.image_size[1] // self.cfg.patch_size[1])
-        self.patches_n = (Pw, Ph)
+        self.patches_n = (
+            self.cfg.image_size[0] // self.cfg.patch_size[0], 
+            self.cfg.image_size[1] // self.cfg.patch_size[1]
+        )
+        print(self.patches_n)
 
         self.embeddings = PatchEmbedder(cfg)
         self.blocks = nn.ModuleList([
             VITTransformerBlock(cfg)
             for _ in range(self.cfg.num_transformer_blocks)
         ])
+        if self.cfg.out_features_size is not None:
+            print(self.cfg.out_features_size)
+            last_block = VITTransformerBlock(out_features_size=self.cfg.out_features_size)
+            self.blocks.add_module(last_block)
     
     def forward(self, input: ImageTensor) -> SequenceTensor:
         
@@ -231,14 +264,15 @@ class VITTransformer(nn.Module):
                 hidden_activations.append(x)
                 attention_activations.append(block_output.attention)
         
-        return VITTransformerOutput(self.patches_n,
-                                x,
-                                hidden_activations,
-                                attention_activations)
+        return x
+        # return VITTransformerOutput(self.patches_n,
+        #                         x,
+        #                         hidden_activations,
+        #                         attention_activations)
                 
         
 
-print(type(VITTransformerConfig))
+# print(type(VITTransformerConfig))
 # if __name__ == "__main__":
 
 #     cfg = _VIT_CONFIGURATIONS["tiny"]

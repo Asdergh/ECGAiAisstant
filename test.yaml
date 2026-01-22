@@ -1,44 +1,55 @@
 sequential:
-  lstm_sequential_encoder:
-    input_features: null
+  lstm:
+    input_features: 128
     name: lstm
     data_domain: temporal
     hiden_features_size: 128
+    out_features_size: null
     activation: sigmoid
     normalization: true
     random_normalization: true
-    num_layers: 10
+    num_layers: 3
     add_bias: true
     bidirectional: false
+    images_size:
+    - 224
+    - 448
+    patch_size:
+    - 16
+    - 32
 visual:
-  vit_visual_encoder:
+  vit:
     name: vit
     data_domain: visual
     input_type: signal
     image_size:
     - 224
-    - 112
+    - 448
     patch_size:
     - 16
-    - 16
+    - 32
     num_transformer_blocks: 4
     out_hidden_indices:
     - 0
     - 1
     - 2
     embeddings_size: 128
-    hidden_features_size: 128
+    hiden_features_size: 128
+    out_features_size: null
     backbone_activation: tanh
     transformer_activation: relu
     attention_activation: sigmoid
     attention_pool_scale: 2
 base:
-  name: base
   num_heads: 4
-  encoder2include:
-  - lstm-sequential-encoder
-  - vit-visual-encoder
+  encoders2include:
+  - lstm
+  - vit
+  checkpoints:
+    sequential: {}
+    visual: {}
+    base: {}
   apply_last_normalization: true
-  randomize_normaliation: true
-  output_features_size: 312
-  attention_activation: tanh
+  randomize_normalization: true
+  fusion_features_size: 312
+  activation_fn: tanh

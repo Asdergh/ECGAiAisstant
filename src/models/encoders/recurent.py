@@ -10,31 +10,25 @@ from .registry import (
 from ..types import *
 
 
-
-print("RECURENT FILE IF DEBUGED")
-class RecurrentEncoderOutput(NamedTuple):
-    last_activation: SequenceTensor
-    last_activation_normalized: SequenceTensor
-    last_cell_activation: SequenceTensor
-    last_hid_activation: SequenceTensor
-
-
-
-@register_config("lstm-sequential-encoder")
+@register_config("lstm", "sequential")
 @dataclass
 class RecurrentEncoderConfig:
-    input_features: Optional[int]=None
+    input_features: Optional[int]=128
     name: Optional[str]="lstm"
     data_domain: Optional[str]="temporal"
     hiden_features_size: Optional[int]=128
+    out_features_size: Optional[int]=None
     activation: Optional[str]="sigmoid"
     normalization: Optional[bool]=True
     random_normalization: Optional[bool]=True
-    num_layers: Optional[int]=10
+    num_layers: Optional[int]=3
     add_bias: Optional[bool]=True
     bidirectional: Optional[bool]=False
+    images_size: Tuple[int, int]=(112, 448)
+    patch_size: Tuple[int, int]=(16, 32)
 
 
+        
 
 class AdaptiveLayerNormalization(nn.Module):
     def __init__(
@@ -46,8 +40,16 @@ class AdaptiveLayerNormalization(nn.Module):
         super(AdaptiveLayerNormalization, self).__init__()
         self.cfg = cfg
         if self.cfg is not None:
-            self.C = self.cfg.hiden_features_size
-            randomize = self.cfg.random_normalization
+            self.C = (
+                hiden_features_size 
+                if hiden_features_size is not None
+                else self.cfg.hiden_features_size
+            )
+            randomize = (
+                normal_randomization
+                if normal_randomization is not None
+                else self.cfg.random_normalization
+            )
         else:
             self.C = hiden_features_size
             randomize = normal_randomization
@@ -71,40 +73,46 @@ class RecurrentEncoder(nn.Module):
     def __init__(self, cfg: RecurrentEncoderConfig) -> None:
         super(RecurrentEncoder, self).__init__()
         self.cfg = cfg
-
+        self.patches_n = (
+            self.cfg.images_size[0] // self.cfg.patch_size[0],
+            self.cfg.images_size[1] // self.cfg.patch_size[1]
+        )
         self.lstm = nn.LSTM(self.cfg.input_features,
                             self.cfg.hiden_features_size,
                             self.cfg.num_layers,
                             bias=self.cfg.add_bias)
         self.act = get_activation(self.cfg.activation)
+        Oc = (
+            self.cfg.out_features_size
+            if self.cfg.out_features_size is not None
+            else self.cfg.hiden_features_size
+        )
+        if self.cfg.out_features_size is not None:
+            self.last_featurees = nn.Linear(self.cfg.hiden_features_size, Oc)
         if self.cfg.normalization:
-            self.adanorm = AdaptiveLayerNormalization(cfg=cfg)
+            self.adanorm = AdaptiveLayerNormalization(Oc, cfg=cfg)
         
-    def forward(self, input: SequenceTensor) -> RecurrentEncoderOutput:
+        print(self.patches_n)
+        self.pooling = nn.AdaptiveAvgPool1d(self.patches_n[0] * self.patches_n[1])
         
-        features, (hidden_states, cell_states) = self.lstm(input)
+    def forward(self, input: SequenceTensor) -> torch.Tensor:
+        
+        features, (_, _) = self.lstm(input)
         features = self.act(features)
-        features_norm = None
         if self.cfg.normalization:
-            features_norm = self.adanorm(features)
+            features = self.adanorm(features)
         
-        if self.cfg.bidirectional:
-            last_hiden_state = torch.cat([hidden_states[-1], hidden_states[-2]], dim=-1)
-            last_cell_state = torch.cat([cell_states[-1], cell_states[-2]], dim=-1)
-        
-        else:
-            last_hiden_state = hidden_states[-1]
-            last_cell_state = cell_states[-1]
-
-        return RecurrentEncoderOutput(features,
-                                      features_norm,
-                                      last_cell_state,
-                                      last_hiden_state)
+        features = features.transpose(-1, -2)
+        features = self.pooling(features).transpose(-1, -2)
+        return features
     
 
 
-if __name__ == "__main__":
 
-    cfg = _RECURRENT_ENCODER_CONFIGURATIONS["tiny"]
-    model = RecurrentEncoder(cfg)
-    print(sum([p.numel() for p in model.parameters()]))
+# if __name__ == "__main__":
+
+    # cfg = RecurrentEncoderConfig(input_features=128)
+    # encoder = RecurrentEncoder(cfg)
+    # test = torch.normal(0, 1, (10, 32, 128))
+    # output = encoder(test)
+    # print(output.size())

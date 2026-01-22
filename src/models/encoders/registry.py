@@ -1,127 +1,25 @@
 import torch
 import torch.nn as nn
 import os
-from omegaconf import OmegaConf
+from omegaconf import (OmegaConf, DictConfig)
+from collections import namedtuple
+from itertools import product
 from ..types import *
 
 
 
 
-_CONFIGS_REGISTRY: Dict[str, Any] = {}
-def register_config(name: str) -> Any:
+_CONFIGS_REGISTRY: Dict[str, Dict[str, Any]] = {"sequential": {}, "visual": {}}
+def register_config(name: str, type: str) -> Any:
     def decorator(cls: Any) -> Any:
         if not is_dataclass(cls):
             raise TypeError(f"instance cls is not a dataclass: {type(cls)}, {cls.__mro__}")
         if name in _CONFIGS_REGISTRY:
             raise KeyError("{name} already in configs registry")
-        _CONFIGS_REGISTRY[name] = cls
+        _CONFIGS_REGISTRY[type][name] = cls
         return cls
     return decorator
 
-@dataclass 
-class GeneralEncoderConfig:
-    loaded_configs: Dict[str, Dict[str, Any]]=field(default_factory=lambda: {
-        "sequential": {}, 
-        "visual": {},
-        "base": {}
-    })
-    
-    def __post_init__(self) -> None:
-        self.build_config()
-
-    def get_configs(self, configs2get: List[str]) -> Dict[str, Any]:
-        configs = {}
-        configs.update({"sequential": [
-            cfg 
-            for (name, cfg) in self.loaded_configs["sequential"].items()
-            if name in configs2get
-        ]})
-        configs.update({"visual": [
-            cfg 
-            for (name, cfg) in self.loaded_configs["visual"].items()
-            if name in configs2get
-        ]})
-        configs.update({"base": self.loaded_configs["base"]})
-        return configs
-
-    def _back2structured(self, name, dict_cfg) -> Any:
-        return _CONFIGS_REGISTRY[name](**dict_cfg)
-    
-    def build_config(self) -> None:
-        for (name, cfg) in _CONFIGS_REGISTRY.items():
-            if name == "base":
-                continue
-            type = name.split("-")[1]
-            self.loaded_configs[type].update({name: cfg})
-        
-        cfg = _CONFIGS_REGISTRY["base"]
-        self.loaded_configs.update({"base": cfg})
-    
-    def save_config(self, path: str, split_mode: Optional[bool]=False) -> None:
-        if not split_mode:
-            config_part = lambda cfg_type: {
-                name.replace("-", "_"): OmegaConf.structured(cfg)
-                for (name, cfg) in self.loaded_configs[cfg_type].items()
-            }
-            config = OmegaConf.merge({
-                "sequential": config_part("sequential"), 
-                "visual": config_part("visual"),
-                "base": OmegaConf.structured(self.loaded_configs["base"])
-            })
-            OmegaConf.save(config, path)
-        
-        else:
-            assert ("." not in path), \
-            (f"try to use split_mode: False for types like: {path}")
-            if not os.path.exists(path):
-                os.mkdir(path)
-
-            for (name, cfg) in list(self.loaded_configs["sequential"].items()) \
-                    + list(self.loaded_configs["visual"].items()) \
-                    + [("base", self.loaded_configs["base"]), ]:
-                file = os.path.join(path, f"{name.replace("-", "_")}.yaml")
-                print(file)
-                cfg = OmegaConf.structured(cfg)
-                OmegaConf.save(cfg, file)
-            
-
-    def load_config(self, source: Union[str, List[str]]) -> None:
-        source_isfile = False
-        if isinstance(source, str) and (os.path.isfile(source)):
-            config = OmegaConf.load(source)
-            self.loaded_configs["sequential"] = {
-                name.replace("_", "-"): self._back2structured(name.replace("_", "-"), cfg) 
-                for (name, cfg) in config.sequential.items()
-            }
-            self.loaded_configs["visual"] = {
-                name.replace("_", "-"): self._back2structured(name.replace("_", "-"), cfg) 
-                for (name, cfg) in config.visual.items()
-            }
-            self.loaded_configs["base"] = self._back2structured("base", config.base)
-            source_isfile = True
-        
-        elif isinstance(source, list) or (not source_isfile):
-            if not source_isfile:
-                source = [os.path.join(source, file) for file in os.listdir(source)]
-            for path in source:
-                fname = os.path.basename(path).split(".")[0]
-                if "base" not in fname:
-                    fname = fname.replace("_", "-")
-                cfg = self._back2structured(fname, OmegaConf.load(path))
-                self.loaded_configs.update({fname: cfg})
-                
-
-
-
-
-
-
-
-
-
-
-
-   
 _ACTIVATIONS = {
     "tanh": nn.Tanh,
     "sigmoid": nn.Sigmoid,
@@ -150,6 +48,115 @@ def load_model(config: Union[str, Any]) -> nn.Module:
     if isinstance(config, str):
         config = OmegaConf.load(config)
     return _ENCODERS_REGISTRY[config.name](config)
+
+
+class FusionManager():
+
+    def __init__(
+        self,
+        num_heads: Optional[int]=4,
+        encoder2include: Optional[List[str]]=["lstm", "vit"],
+        checkpoints: Optional[Dict[str, Dict[str, Any]]]={"sequential": {}, "visual": {}, "base": {}},
+        apply_last_normalization: Optional[bool]=True,
+        randomize_normaliation: Optional[bool]=True,
+        attention_activation: Optional[str]="tanh",
+        fusion_features_size: Optional[int]=312
+    ):
+        # print(type(checkpoints))
+        self.internel_config: Dict[str, Any] = {
+            "num_heads": num_heads,
+            "encoders2include": encoder2include,
+            "checkpoints": checkpoints,
+            "apply_last_normalization": apply_last_normalization,
+            "randomize_normalization": randomize_normaliation,
+            "fusion_features_size": fusion_features_size,
+            "activation_fn": attention_activation
+        }
+        self.sequential: Dict[str, Any] = {}
+        self.visual: Dict[str, Any] = {}
+        
+
+
+    def _back2structured(self, type, dict_cfg) -> Any:
+        return _CONFIGS_REGISTRY[type][dict_cfg.name](**dict_cfg)
+    
+    def build_config(self) -> None:
+        self.sequential = _CONFIGS_REGISTRY["sequential"]
+        self.visual = _CONFIGS_REGISTRY["visual"]
+        self.cfg_splits = {
+            "sequential": self.sequential,
+            "visual": self.visual
+        }
+
+    def save_config(self, path: str, split_mode: Optional[bool]=False) -> None:
+        base_cfg = OmegaConf.create(vars(self)["internel_config"])
+        # print(type(vars(self)["internel_config"]["checkpoints"]))
+        if not split_mode:
+            config = OmegaConf.merge({
+                "sequential": {k: OmegaConf.structured(c) for (k, c) in self.sequential.items()},
+                "visual": {k: OmegaConf.structured(c) for (k, c) in self.visual.items()},
+                "base": base_cfg
+            })
+            OmegaConf.save(config, path)
+        
+        else:
+            assert ("." not in path), \
+            (f"try to use split_mode: False for types like: {path}")
+            if not os.path.exists(path):
+                os.mkdir(path)
+
+            def save_cfgf(configs: Union[Any, Dict[str, Any]], type: str=None): 
+                if not isinstance(configs, DictConfig):
+                    for (k, c) in configs.items():
+                        filename = os.path.join(path, f"{k}-{type}.yaml")
+                        OmegaConf.save(c, filename)
+                else:
+                    filename = os.path.join(path, f"{type}.yaml")
+                    OmegaConf.save(configs, filename)
+
+            save_cfgf(self.sequential, "sequential")
+            save_cfgf(self.visual, "visual")
+            save_cfgf(base_cfg, "base")
+            
+
+    def load_config(self, source: Union[str, List[str]]) -> None:
+        source_isfile = False
+        if isinstance(source, str) and (os.path.isfile(source)):
+            config = OmegaConf.load(source)
+            self.sequential = {c.name: self._back2structured("sequential", c) for c in config.sequential.values()}
+            self.visual = {c.name: self._back2structured("visual", c) for c in config.visual.values()}
+            base_cfg = config.base
+            source_isfile = True
+        
+        elif isinstance(source, list) or (not source_isfile):
+            cfgs = {"sequential": self.sequential, "visual": self.visual}
+            if not source_isfile:
+                source = [os.path.join(source, file) for file in os.listdir(source)]
+            for path in source:
+                c = OmegaConf.load(path)
+                if not "base" in path:
+                    c = self._back2structured(c.name, c)
+                    split = os.path.basename(path).split(".")[0].split("-")[-1]
+                    cfgs[split].update({c.name: c})
+                else:
+                    base_cfg = c
+        
+        for (key, value) in base_cfg.items():
+            if key in self.internel_config:
+                self.internel_config[key] = value
+            else:
+                raise KeyError(f"key error, {key} not specified in self.internel_config")
+            
+        self.cfg_splits = {
+            "sequential": self.sequential,
+            "visual": self.visual
+        }   
+            
+            
+
+
+   
+
 
 
 

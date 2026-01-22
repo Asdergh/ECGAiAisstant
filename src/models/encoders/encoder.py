@@ -1,112 +1,178 @@
 import torch 
 import math
+import os
 import torch.nn as nn
 import torch.nn.functional as F
 from itertools import permutations
 
 from omegaconf import OmegaConf
-from .registry import GeneralEncoderConfig
 from .recurent import (RecurrentEncoderConfig, AdaptiveLayerNormalization)
 from .visual import (VITTransformerConfig, VITSelfAttention)
-from .registry import ( 
-    load_model,  
-    get_activation,
-    register_config,
-    GeneralEncoderConfig
-)
+from .registry import (FusionManager, load_model, get_activation, _ENCODERS_REGISTRY)
 from ..types import *
 from itertools import product
 
 
-class ECGEncoderOutput(NamedTuple):
-    last_fusion: SequenceTensor
-    intermediate_fusions: List[SequenceTensor]
 
 
 
 
 
-@register_config("base")
-@dataclass
-class ECGEncoderConfig:
-    name: Optional[str]="base"
-    num_heads: Optional[int]=4
-    encoder2include: Optional[List[str]]=field(default_factory=lambda: [
-        "lstm-sequential-encoder", 
-        "vit-visual-encoder"
-    ])
-    apply_last_normalization: Optional[bool]=True
-    randomize_normaliation: Optional[bool]=True
-    output_features_size: Optional[int]=312
-    attention_activation: Optional[str]="tanh"
+class FCBlock(nn.Module):
 
-class ECGEncoder(nn.Module):
-    def __init__(self, general_cfg: GeneralEncoderConfig) -> None:
-        super(ECGEncoder, self).__init__()
-
-        self.base_cfg = general_cfg.load_config["base"]
-        configs = general_cfg.get_configs(self.base_cfg.encoder2include)
-        self.sequential_models = {cfg.name: load_model(cfg) for cfg in configs["sequential"]}
-        self.visual_models = {cfg.name: load_model(cfg) for cfg in configs["visual"]}
-
-        hiden_d = self.check_hiden_dims(configs["sequential"], configs["visual"])
-        (num_seq_m, num_vis_m) = (len(self.sequential_models), len(self.visual_models)) 
-        self.features = nn.Sequential(
-            nn.Linear(num_seq_m * num_vis_m * hiden_d, self.cfg.output_features_size),
-            get_activation("sigmoid")
-        )
-        self.adanorm = AdaptiveLayerNormalization(self.cfg.output_features_size)
-        self.attention_layers = nn.ModuleList([
-            VITSelfAttention(
-                activation_fn=self.cfg.attention_activation,
-                hiden_features_size=hiden_d
-            ) for _ in range(num_seq_m * num_seq_m)
-        ])
+    def __init__(
+        self,
+        in_features_size: Optional[int]=None,
+        out_features_size: Optional[int]=None,
+        dropout_rate: Optional[float]=0.45,
+        activation_fn: Optional[str]="relu"
+    ) -> None:
+        super(FCBlock, self).__init__()
+        self.fc1 = nn.Linear(in_features_size, out_features_size)
+        self.act_fn = get_activation(activation_fn)
+        self.dropout = nn.Dropout(dropout_rate)
+        self.fc2 = nn.Linear(out_features_size, out_features_size)
     
-    def check_hiden_dims(self, sq_cfgs: Dict[str, Any], vis_cfgs: Dict[str, Any]):
+    def forward(self, input: SequenceTensor) -> SequenceTensor:
+        x = self.fc1(input)
+        x = self.act_fn(x)
+        x = self.dropout(x)
+        x = self.fc2(x)
+        return x
+    
+class FusionEncoder(nn.Module):
+    def __init__(self, source_cfg: Optional[str]=None) -> None:
+        super(FusionEncoder, self).__init__()
+        self.manager = FusionManager()
+        if (source_cfg is not None) \
+            and (os.path.exists(source_cfg)):
+            self.manager.load_config(source_cfg)
+        else:
+            # print("CONFIGS WAS BUILEDE")
+            self.manager.build_config()
+        
+        self.cfg = self.manager.internel_config
+    
+    
+    def build_encoders(self, split_type) -> nn.ModuleDict:
+        models = {}
+        ckpt_pkg = self.cfg["checkpoints"][split_type]
+        for (k, c) in self.manager.cfg_splits[split_type].items():
+            model = load_model(c)
+            if (ckpt_pkg is not None) \
+                and (k in ckpt_pkg):
+                if os.path.exists(ckpt_pkg[k]):
+                    model.load_state_dict(torch.load(ckpt_pkg[k], weights_only=True))
+                    model.eval()
+                else:
+                    raise ValueError(f"counld find ckepoints at location: {ckpt_pkg[k]}")
+            models.update({k: model})
+        return nn.ModuleDict(models)
+        
+    def build_fusion_encoder(self):
+        #build registered models with there checkpoints
+        self.sequential_models = self.build_encoders("sequential")
+        self.visual_models = self.build_encoders("visual")
+        self._models = {
+            "sequential": self.sequential_models,
+            "visual": self.visual_models
+        }
+        ckpt_pkg = self.cfg["checkpoints"]["base"]
 
-        hiden_sizes = set([cfg.hiden_features_size for cfg in sq_cfgs] + 
-                          [cfg.hiden_featuers_size for cfg in vis_cfgs])
-        assert (len(hiden_sizes) == 1), \
-        ("the hiden sizes nfrof different models are not the same")
-        return hiden_sizes.pop() 
+        #build projections to project all features into fusion domain
+        def get_projections(split_type: str):
+            projection_blocks = {}
+            cfgs = self.manager.cfg_splits[split_type]
+            for k in cfgs.keys():
+                hiden_d = (
+                    cfgs[k].out_features_size
+                    if cfgs[k].out_features_size is not None
+                    else cfgs[k].hiden_features_size
+                )
+                projection = FCBlock(hiden_d, self.cfg["fusion_features_size"])
+                if k in ckpt_pkg:
+                    projection.load_state_dict(torch.load(ckpt_pkg[k], weights_only=True))
+                projection_blocks.update({k: projection})
+            return projection_blocks
+        sequential_pj = get_projections("sequential")
+        visual_pj = get_projections("visual")
+        self.projections = nn.ModuleDict(sequential_pj | visual_pj)
+
+        #build fusion blocks for calculate the correlation between activations
+        fused_N = len(self.sequential_models) + len(self.visual_models)
+        self.fusion_gates = nn.Parameter(torch.normal(0, 1, (fused_N * self.cfg["fusion_features_size"], )))
+        self.fusion = VITSelfAttention("tanh", fused_N *  self.cfg["fusion_features_size"])
+        self.activation = get_activation(self.cfg["activation_fn"])
+
     
-    # def _load_models(self, config) -> Tuple[nn.ModuleDict, nn.ModuleDict]:
+    def forward(self, seq_input: SequenceTensor, freq_input: ImageTensor) -> Dict[str, Any]:
         
-    
-    def forward(self, signal: SequenceTensor, spec: ImageTensor) -> ECGEncoderOutput:
+        def forward_throught(input: torch.Tensor, split_type: str):
+            activations = []
+            for (k, model) in self._models[split_type].items():
+                x = model(input)
+                print(k, x.size())
+                x = self.projections[k](x)
+                activations.append(x)
+            return (
+                activations[0]
+                if len(activations) == 1
+                else torch.stack(activations, dim=-1)
+            )
         
-        sequential_acts = {}
-        xs = signal
-        for key, model in self.sequential_encoders.items():
-            xs = model(sequential_acts).last_activation
-            sequential_acts[key] = xs
+        sequentials = forward_throught(seq_input, "sequential")
+        visuals = forward_throught(freq_input, "visual")
+        features_vs = torch.cat([visuals, sequentials], dim=-1)
+        features_sv = torch.cat([sequentials, visuals], dim=-1)
         
-        visual_acts = {}
-        xv = spec
-        for key, model in self.visual_encoders.items():
-            xv = model(xv).features
-            visual_acts[key] = xv
+        fusion_vs = self.fusion(features_vs)
+        fusion_sv = self.fusion(features_sv)
+        fused_features = self.fusion_gates * fusion_vs + (1 - self.fusion_gates) * fusion_sv
+        return fused_features
         
-        pares = product(list(sequential_acts.keys()), list(visual_acts.keys()))
-        fusions = []
-        for idx, (xs, xv) in enumerate(pares):
-            fusion = self.attention_layers[idx](xs, xv)
-            fusions.append(fusion)
         
-        fusion = torch.cat(fusion, dim=-1)
-        fusion_features = self.features(fusion)
-        fusion_features_normalized = self.adanorm(fusion_features)
-        return ECGEncoderOutput(fusion_features_normalized,
-                                fusions)
-            
         
+
+        
+
+
 
 
 if __name__ == "__main__":
+    
+    # model = FusionEncoder()
+    # model.manager.build_config()
+    # model.manager.save_config("test.yaml")
+    model = FusionEncoder("test.yaml")
+    model.build_fusion_encoder()
+    test_sq = torch.normal(0, 1, (10, 1000, 128))
+    test_specs = torch.normal(0, 1, (10, 1, 224, 448))
+    output = model(test_sq, test_specs)
+    print(output.size())
 
-    config = GeneralEncoderConfig()
-    model = ECGEncoder(config)
+
+
+
+
+
+    # model.manager.build_config()
+    # model.manager.save_config("test.yaml")
+    # model.build_fusion_encoder()
+    # print(model)
+    # model.manager.save_config("test.yaml")
+    # print(model)
+    # print(sum([p.numel() for p in model.parameters()]))
+    # print(_ENCODERS_REGISTRY)
+    # encoder_builder = EncoderBuilder()
+    # encoder_builder.save_config("test.yaml", split_mode=False)
+    # encoder_builder.save_config("test_split", split_mode=True)
+    # encoder_builder.load_config("test.yaml")
+    # print(encoder_builder.visual)
+    # print(encoder_builder.sequential)
+    # print(encoder_builder.internel_config)
+    
+    
+   
     # config.save_config("test.yaml")        
 
 # if __name__ == "__main__":
