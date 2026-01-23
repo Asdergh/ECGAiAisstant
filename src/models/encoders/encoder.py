@@ -10,11 +10,6 @@ from .recurent import (RecurrentEncoderConfig, AdaptiveLayerNormalization)
 from .visual import (VITTransformerConfig, VITSelfAttention)
 from .registry import (FusionManager, load_model, get_activation, _ENCODERS_REGISTRY)
 from ..types import *
-from itertools import product
-
-
-
-
 
 
 
@@ -139,10 +134,6 @@ class FusionEncoder(nn.Module):
 
 
 if __name__ == "__main__":
-    
-    # model = FusionEncoder()
-    # model.manager.build_config()
-    # model.manager.save_config("test.yaml")
     model = FusionEncoder("test.yaml")
     model.build_fusion_encoder()
     test_sq = torch.normal(0, 1, (10, 1000, 128))
@@ -150,41 +141,6 @@ if __name__ == "__main__":
     output = model(test_sq, test_specs)
     print(output.size())
 
-
-
-
-
-
-    # model.manager.build_config()
-    # model.manager.save_config("test.yaml")
-    # model.build_fusion_encoder()
-    # print(model)
-    # model.manager.save_config("test.yaml")
-    # print(model)
-    # print(sum([p.numel() for p in model.parameters()]))
-    # print(_ENCODERS_REGISTRY)
-    # encoder_builder = EncoderBuilder()
-    # encoder_builder.save_config("test.yaml", split_mode=False)
-    # encoder_builder.save_config("test_split", split_mode=True)
-    # encoder_builder.load_config("test.yaml")
-    # print(encoder_builder.visual)
-    # print(encoder_builder.sequential)
-    # print(encoder_builder.internel_config)
-    
-    
-   
-    # config.save_config("test.yaml")        
-
-# if __name__ == "__main__":
-
-#    pass
-    # base_cfg = ECGEncoderConfig()
-    # rnn_cfg = RecurrentEncoderConfig(100)
-    # vit_cfg = VITTransformerConfig()
-    # configs = [rnn_cfg, vit_cfg]
-    # model = ECGEncoder(base_cfg, configs)
-    
-    # print(sum([p.numel() for p in model.parameters()]))
 
 
 
